@@ -57,32 +57,6 @@ import datetime as dt
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 _callback_info = {"iter": 0, "llf": 0.0, "count": 0, "display": 1}
 
-def _callback(parameters: Float64Array, *args: Any) -> None:
-    """
-    Callback for use in optimization
-
-    Parameters
-    ----------
-    parameters : ndarray
-        Parameter value (not used by function).
-    *args
-        Any other arguments passed to the minimizer.
-
-    Notes
-    -----
-    Uses global values to track iteration, iteration display frequency,
-    log likelihood and function count
-    """
-
-    _callback_info["iter"] += 1
-    disp = "Iteration: {0:>6},   Func. Count: {1:>6.3g},   Neg. LLF: {2}"
-    if _callback_info["iter"] % _callback_info["display"] == 0:
-        print(
-            disp.format(
-                _callback_info["iter"], _callback_info["count"], _callback_info["llf"]
-            )
-        )
-
 class ARCHModel():
     """
     Abstract base class for mean models in ARCH processes.  Specifies the
@@ -97,7 +71,7 @@ class ARCHModel():
         self,
         y: Optional[ArrayLike] = None,
         volatility: Optional[GARCH] = None,
-        distribution: DoubleNormal = None,
+        distribution: Optional[DoubleNormal] = None,
         hold_back: Optional[int] = None,
         rescale: Optional[bool] = None,
     ) -> None:
@@ -238,19 +212,17 @@ class ARCHModel():
 
         # 1. Resids
         mp, vp, dp, weight = self._parse_parameters(parameters)
-        resids = self.resids(mp) ###########
+        resids1 = self.resids(mp[0])
+        resids2 = self.resids(mp[1])
+        ###########
         # 2. Compute sigma2 using VolatilityModel
-        print(mp, vp, dp, weight)
        
         sigma1, sigma2 = self.volatility.compute_variance(
-            np.append(vp,weight), resids, sigma1, sigma2, backcast, var_bounds
+            vp, resids1, resids2, sigma1, sigma2, backcast, var_bounds
         )
         
         # 3. Compute log likelihood using Distribution
-        llf = self.distribution.loglikelihood(dp, resids, sigma1, sigma2, weight, individual)
-        print("sigma1", sigma1)
-        print("sigma2", sigma2)
-        print("LLF", -llf)
+        llf = self.distribution.loglikelihood(mp, resids1, resids2, sigma1, sigma2, weight, individual)
         if not individual:
             _callback_info["llf"] = llf_f = -float(llf)
             return llf_f
@@ -263,7 +235,8 @@ class ARCHModel():
         """Return the parameters of each model in a tuple"""
         x = np.asarray(x, dtype=np.float64)
         km, kv = int(self.num_params), int(self.volatility.num_params)
-        return x[:km], x[km : km + kv+1], [], x[km + kv+1 :]
+      
+        return x[:km], x[km : km + kv], [], x[km + kv:]
 
     def fit(
         self,
@@ -323,14 +296,13 @@ class ARCHModel():
         # 1. Check in ARCH or Non-normal dist.  If no ARCH and normal,
         # use closed form
         v, d = self.volatility, self.distribution
-        self.num_params = 1
+        self.num_params = 2
         d.num_params = 0
         offsets = np.array((self.num_params, v._num_params, d.num_params), dtype=int)
-        print("offsets",offsets)
         total_params = sum(offsets)
-        
-        resids = self.resids(self.starting_values())
-        
+        print(total_params)
+        resids1 = self.resids(self.starting_values())
+        resids2 = self.resids(self.starting_values())
         if self.scale != 1.0:
             # Scale changed, rescale data and reset model
             self._y = cast(np.ndarray, self.scale * np.asarray(self._y_original))
@@ -338,38 +310,24 @@ class ARCHModel():
             resids = self.resids(self.starting_values())
 
         if backcast is None:
-            backcast = v.backcast(resids)
+            backcast = v.backcast(resids1)
         else:
             assert backcast is not None
             backcast = v.backcast_transform(backcast)
 
         assert backcast is not None
-        
-        sigma1 = np.zeros_like(resids)
-        sigma2 = np.zeros_like(resids)
+
+        sigma1 = np.zeros_like(resids1)
+        sigma2 = np.zeros_like(resids2)
         self._backcast = backcast
-        sv_volatility = v.starting_values(resids)
-        self._var_bounds = var_bounds = v.variance_bounds(resids)
-        v.compute_variance(sv_volatility, resids, sigma1, sigma2, backcast, var_bounds)
-        std_resids = resids / np.sqrt(sigma2)
+        sv_volatility = v.starting_values(resids1, resids2)
+        self._var_bounds = var_bounds = v.variance_bounds(resids1)
+        sigma1, sigma2 = v.compute_variance(sv_volatility, resids1, resids2, sigma1, sigma2, backcast, var_bounds)
+        std_resids = resids1 / np.sqrt(sigma2)
         
         # 2. Construct constraint matrices from all models and distribution
-        constraints = (
-            self.constraints(),
-            self.volatility.constraints(),
-            self.distribution.constraints(),
-        )
-        num_cons = []
-        for c in constraints:
-            assert c is not None
-            num_cons.append(c[0].shape[0])
-        num_constraints = np.array(num_cons, dtype=int)
-        num_params = offsets.sum()
-        a = np.zeros((int(num_constraints.sum()), int(num_params)))
-        b = np.zeros(int(num_constraints.sum()))
-
         bounds = self.bounds()
-        bounds.extend(v.bounds(resids))
+        bounds.extend(v.bounds(resids1))
         bounds.extend(d.bounds(std_resids))
         bounds.extend([(0,1)])
         print(bounds)
@@ -380,18 +338,9 @@ class ARCHModel():
         func = self._loglikelihood
         args = (sigma1, sigma2, backcast, var_bounds)
 
-        
         from scipy.optimize import NonlinearConstraint
-        
-        con = lambda x: x[3]*x[5] + x[4]*(1 - x[5]) + x[2]
-        ineq_constraints1 = NonlinearConstraint(con, 0, 1)
-        
-        con = lambda x: x[3]*x[5] + x[4]*(1 - x[5])
-        ineq_constraints2 = NonlinearConstraint(con, 0, 1)
-        
-        ineq_constraints = []
-        ineq_constraints.append(ineq_constraints1)
-        ineq_constraints.append(ineq_constraints2)
+        con = lambda x: (x[3] + x[5])*x[7] + (x[4] + x[6])*(1 - x[7])
+        ineq_constraints = NonlinearConstraint(con, 0, 1)
         
         print("start Optimization")
         print("SV", sv)
@@ -422,25 +371,26 @@ class ARCHModel():
         # 5. Return results
         params = opt.x
         loglikelihood = -1.0 * opt.fun
-        
+
         mp, vp, dp, weight = self._parse_parameters(params)
-        r2 = self._r2(mp)
-        
-        vol = np.zeros_like(resids)
-        self.volatility.compute_variance(np.append(vp,weight), resids, vol, vol,backcast, var_bounds)
+
+        vol = np.zeros_like(resids1)
+        sigma1, sigma2 = self.volatility.compute_variance(np.append(vp,weight), resids1, resids2, vol, vol,backcast, var_bounds)
         vol = cast(Float64Array, np.sqrt(vol))
 
         # Reshape resids and vol
         first_obs, last_obs = self._fit_indices
         resids_final = np.empty_like(self._y, dtype=np.float64)
         resids_final.fill(np.nan)
-        resids_final[first_obs:last_obs] = resids
+        resids_final[first_obs:last_obs] = resids1
         vol_final = np.empty_like(self._y, dtype=np.float64)
         vol_final.fill(np.nan)
         vol_final[first_obs:last_obs] = vol
-        names = ["mean", "omega", "alpha", "beta1", "beta2", "weight"]
+
+        names = ["mean1","mean2", "omega", "alpha1", "alpha2","beta1", "beta2", "weight"]
         fit_start, fit_stop = self._fit_indices
         from copy import deepcopy
+        r2 = self._r2(mp[0])
         model_copy = deepcopy(self)
         return (
             params,
@@ -469,6 +419,70 @@ class ARCHModel():
         e = self.resids(params)
             
         return 1.0 - float(e.T.dot(e)) / tss
+    
+    def starting_values(self) -> Float64Array:
+        """
+        Returns starting values for the mean model, often the same as the
+        values returned from fit
+
+        Returns
+        -------
+        sv : ndarray
+            Starting values
+        """
+        return 0.0
+    
+    def compute_param_cov(
+        self,
+        params: Float64Array,
+        backcast: Union[None, float, Float64Array] = None,
+        robust: bool = True,
+    ) -> Float64Array:
+        """
+        Computes parameter covariances using numerical derivatives.
+
+        Parameters
+        ----------
+        params : ndarray
+            Model parameters
+        backcast : float
+            Value to use for pre-sample observations
+        robust : bool, optional
+            Flag indicating whether to use robust standard errors (True) or
+            classic MLE (False)
+
+        """
+        resids = self.resids(self.starting_values())
+        var_bounds = self.volatility.variance_bounds(resids)
+        nobs = resids.shape[0]
+        if backcast is None and self._backcast is None:
+            backcast = self.volatility.backcast(resids)
+            self._backcast = backcast
+        elif backcast is None:
+            backcast = self._backcast
+
+        kwargs = {
+            "sigma1": np.zeros_like(resids),
+            "sigma2": np.zeros_like(resids),
+            "backcast": backcast,
+            "var_bounds": var_bounds,
+            "individual": False,
+        }
+
+        hess = approx_hess(params, self._loglikelihood, kwargs=kwargs)
+        hess /= nobs
+        inv_hess = np.linalg.inv(hess)
+        if robust:
+            kwargs["individual"] = True
+            scores = approx_fprime(
+                params, self._loglikelihood, kwargs=kwargs
+            )  # type: np.ndarray
+            score_cov = np.cov(scores.T)
+            return inv_hess.dot(score_cov).dot(inv_hess) / nobs
+        else:
+            return inv_hess / nobs
+    
+    
     
     def starting_values(self) -> Float64Array:
         """
@@ -585,3 +599,30 @@ def implicit_constant(x: Float64Array) -> bool:
     nobs = x.shape[0]
     rank = np.linalg.matrix_rank(np.hstack((np.ones((nobs, 1)), x)))
     return rank == x.shape[1]
+
+
+def _callback(parameters: Float64Array, *args: Any) -> None:
+    """
+    Callback for use in optimization
+
+    Parameters
+    ----------
+    parameters : ndarray
+        Parameter value (not used by function).
+    *args
+        Any other arguments passed to the minimizer.
+
+    Notes
+    -----
+    Uses global values to track iteration, iteration display frequency,
+    log likelihood and function count
+    """
+
+    _callback_info["iter"] += 1
+    disp = "Iteration: {0:>6},   Func. Count: {1:>6.3g},   Neg. LLF: {2}"
+    if _callback_info["iter"] % _callback_info["display"] == 0:
+        print(
+            disp.format(
+                _callback_info["iter"], _callback_info["count"], _callback_info["llf"]
+            )
+        )

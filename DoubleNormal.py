@@ -45,8 +45,8 @@ class DoubleNormal():
 
     def __init__(
         self) -> None:
-        self._name = "Double_Normal"
-        self.name = "Double_Normal"
+        self._name = "Double_Normal+Alpha+Mean"
+        self.name = "Double_Normal+Alpha+Mean"
     def constraints(self) -> Tuple[Float64Array, Float64Array]:
         return empty(0), empty(0)
 
@@ -56,7 +56,8 @@ class DoubleNormal():
     def loglikelihood(
         self,
         parameters: Union[Sequence[float], ArrayLike1D],
-        resids: ArrayLike,
+        resids1: ArrayLike,
+        resids2: ArrayLike,
         sigma1: ArrayLike,
         sigma2: ArrayLike,
         weight: Float64Array,
@@ -93,7 +94,9 @@ class DoubleNormal():
             +\frac{x^{2}}{\sigma^{2}}\right)
 
         """
-        lls = log( weight/sqrt(2*pi*sigma1)*exp(-0.5*resids**2/sigma1) + (1-weight)/sqrt(2*pi*sigma2)*exp(-0.5*resids**2/sigma2) )
+        mu1 = parameters[0]
+        mu2 = parameters[1]
+        lls = log( weight/sqrt(2*pi*sigma1)*exp(-0.5* (resids1 - mu1)**2/sigma1) + (1-weight)/sqrt(2*pi*sigma2)*exp(-0.5*(resids2 - mu2)**2 /sigma2) )
         if individual:
             return lls
         else:

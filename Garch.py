@@ -97,9 +97,8 @@ class GARCH():
         self.q: int = int(q)
         self._normal = DoubleNormal()
         self.power: float = power
-        self.name = "GARCH"
-        self.num_params = 1 + p + o + q
-        self._num_params = 1 + p + o + q
+        self.num_params = 1 + p + o + q + 2
+        self._num_params = 1 + p + o + q + 2 
         if p < 0 or o < 0 or q < 0:
             raise ValueError("All lags lengths must be non-negative")
         if p == 0 and o == 0:
@@ -110,6 +109,7 @@ class GARCH():
             )
         self._name = self._generate_name()
 
+        self.name = "Garch"
     def __str__(self) -> str:
         descr = self.name
 
@@ -196,6 +196,7 @@ class GARCH():
 
         bounds = [(1e-8 * v, 10.0 * float(v))]
         bounds.extend([(0.0, 1.0)] * self.p)
+        bounds.extend([(0.0, 1.0)] * self.p)
         for i in range(self.o):
             if i < self.p:
                 bounds.append((-1.0, 2.0))
@@ -206,30 +207,11 @@ class GARCH():
         bounds.extend([(0.0, 1.0)] * self.q)
         return bounds
 
-    def constraints(self) -> Tuple[Float64Array, Float64Array]:
-        p, o, q = self.p, self.o, self.q + 1
-        k_arch = p + o + q
-        # alpha[i] >0
-        # alpha[i] + gamma[i] > 0 for i<=p, otherwise gamma[i]>0
-        # beta[i] >0
-        # sum(alpha) + 0.5 sum(gamma) + sum(beta) < 1
-        a = np.zeros((k_arch + 2, k_arch + 1))
-        for i in range(k_arch + 1):
-            a[i, i] = 1.0
-        for i in range(o):
-            if i < p:
-                a[i + p + 1, i + 1] = 1.0
-
-        a[k_arch + 1, 1:] = -1.0
-        a[k_arch + 1, p + 1 : p + o + 1] = -0.5
-        b = np.zeros(k_arch + 2)
-        b[k_arch + 1] = -1.0
-        return a, b
-
     def compute_variance(
         self,
         parameters: Float64Array,
-        resids: Float64Array,
+        resids1: Float64Array,
+        resids2: Float64Array,
         sigma1: Float64Array,
         sigma2: Float64Array,
         backcast: Union[float, Float64Array],
@@ -238,14 +220,15 @@ class GARCH():
         # fresids is abs(resids) ** power
         # sresids is I(resids<0)
         power = self.power
-        fresids = np.abs(resids) ** power
-        sresids = np.sign(resids)
+        fresids1 = np.abs(resids1) ** power
+        fresids2 = np.abs(resids2) ** power
+        sresids = np.sign(resids1)
 
         p, o, q = self.p, self.o, self.q
-        nobs = resids.shape[0]
+        nobs = resids1.shape[0]
 
         sigma1, sigma2 = garch_recursion(
-            parameters, fresids, sresids, sigma1, sigma2, p, o, q, nobs, backcast, var_bounds
+            parameters, fresids1, fresids2, sresids, sigma1, sigma2, p, o, q, nobs, backcast, var_bounds
         )
         
       
@@ -263,25 +246,25 @@ class GARCH():
 
         return float(backcast)
     
-    def starting_values(self, resids: Float64Array) -> Float64Array:
-        p, o, q = self.p, self.o, self.q + 1
+    def starting_values(self, resids1: Float64Array, resids2: Float64Array) -> Float64Array:
+        p, o, q = self.p, self.o, self.q
         power = self.power
         alphas = [0.01, 0.05, 0.1, 0.2]
         gammas = alphas
         abg = [0.5, 0.7, 0.9, 0.98]
         abgs = list(itertools.product(*[alphas, gammas, abg]))
-        target = np.mean(abs(resids) ** power)
-        print(target)
-        scale = np.mean(resids**2) / (target ** (2.0 / power))
+        target = np.mean(abs(resids1) ** power)
+        scale = np.mean(resids1**2) / (target ** (2.0 / power))
         target *= scale ** (power / 2)
 
         svs = []
-        var_bounds = self.variance_bounds(resids)
-        backcast = self.backcast(resids)
+        var_bounds = self.variance_bounds(resids1)
+        backcast = self.backcast(resids1)
         llfs = np.zeros(len(abgs))
+        print(p, o, q)
         for i, values in enumerate(abgs):
             alpha, gamma, agb = values
-            sv = (1.0 - agb) * target * np.ones(p + o + q + 1)
+            sv = (1.0 - agb) * target * np.ones(p + o + q + 1 + 2)
             if p > 0:
                 sv[1 : 1 + p] = alpha / p
                 agb -= alpha
@@ -291,7 +274,7 @@ class GARCH():
             if q > 0:
                 sv[1 + p + o : 1 + p + o + q] = agb / q
             svs.append(sv)
-            llfs[i] = self._gaussian_loglikelihood(sv, resids, backcast, var_bounds)
+            llfs[i] = self._gaussian_loglikelihood(sv, resids1, resids2, backcast, var_bounds)
         loc = np.argmax(llfs)
 
         return svs[int(loc)]
@@ -300,7 +283,8 @@ class GARCH():
     def _gaussian_loglikelihood(
         self,
         parameters: Float64Array,
-        resids: Float64Array,
+        resids1: Float64Array,
+        resids2: Float64Array,
         backcast: Union[float, Float64Array],
         var_bounds: Float64Array,
     ) -> float:
@@ -308,7 +292,8 @@ class GARCH():
         Private implementation of a Gaussian log-likelihood for use in constructing starting
         values or other quantities that do not depend on the distribution used by the model.
         """
-        sigma2 = np.zeros_like(resids)
-        sigma1 = np.zeros_like(resids)
-        self.compute_variance(parameters, resids, sigma1, sigma2, backcast, var_bounds)
-        return float(self._normal.loglikelihood([], resids, sigma1, sigma2, 0))
+        sigma1 = np.zeros_like(resids1)
+        sigma2 = np.zeros_like(resids2)
+        
+        self.compute_variance(parameters, resids1, resids2, sigma1, sigma2, backcast, var_bounds)
+        return float(self._normal.loglikelihood([0,0], resids1, resids2, sigma1, sigma2, 0))

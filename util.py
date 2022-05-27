@@ -47,7 +47,8 @@ from arch.utility.array import AbstractDocStringInheritor, ensure1d
 
 def garch_recursion(
     parameters: Float64Array,
-    fresids: Float64Array,
+    fresids1: Float64Array,
+    fresids2: Float64Array,
     sresids: Float64Array,
     sigma1: Float64Array,
     sigma2: Float64Array,
@@ -87,7 +88,6 @@ def garch_recursion(
         nobs by 2-element array of upper and lower bounds for conditional
         transformed variances for each time period
     """
-    
     for t in range(nobs):
         loc = 0
         sigma1[t] = parameters[loc]
@@ -96,11 +96,11 @@ def garch_recursion(
         for j in range(p):
             if (t - 1 - j) < 0:
                 sigma1[t] += parameters[loc] * backcast
-                sigma2[t] += parameters[loc] * backcast
+                sigma2[t] += parameters[loc+1] * backcast
             else:
-                sigma1[t] += parameters[loc] * fresids[t - 1 - j]
-                sigma2[t] += parameters[loc] * fresids[t - 1 - j]
-            loc += 1
+                sigma1[t] += parameters[loc] * fresids1[t - 1 - j]
+                sigma2[t] += parameters[loc+1] * fresids2[t - 1 - j]
+            loc += 2
         for j in range(q):
             if (t - 1 - j) < 0:
                 sigma1[t] += parameters[loc] * backcast
@@ -110,8 +110,6 @@ def garch_recursion(
                 sigma2[t] += parameters[loc+1] * sigma2[t - 1 - j]
             loc += 1
     return sigma1, sigma2
-
-
 def format_float_fixed(x: float, max_digits: int = 10, decimal: int = 4) -> str:
     """Formats a floating point number so that if it can be well expressed
     in using a string with digits len, then it is converted simply, otherwise
