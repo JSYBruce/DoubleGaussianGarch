@@ -17,7 +17,7 @@ model.resids2
 If you have no data in loca, run data scraper as the following:
 ```py
 from DataSraper import get_crypto_data
-get_crypto_data("BYC")
+get_crypto_data("BTC")
 ```
 
 Then you can rerun the model.
