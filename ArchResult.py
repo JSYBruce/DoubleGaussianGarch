@@ -341,6 +341,19 @@ class ARCHModelResult(ARCHModelFixedResult):
         self._optim_output = optim_output
         self._nobs = self.model._fit_y.shape[0]
 
+        import pickle
+        with open("sigma1_data", "rb") as fp:   #Pickling
+            self.sigma1 = pickle.load(fp)
+        
+        with open("sigma2_data", "rb") as fp:   #Pickling
+            self.sigma2 = pickle.load(fp)
+            
+        with open("resids1", "rb") as fp:   #Pickling
+            self.resids1 = pickle.load(fp)
+        
+        with open("resids2", "rb") as fp:   #Pickling
+            self.resids2 = pickle.load(fp)
+            
     @cached_property
     def scale(self) -> float:
         """

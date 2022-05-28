@@ -348,7 +348,8 @@ class ARCHModel():
 
         options = {} if options is None else options
         
-        
+
+            
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -374,6 +375,25 @@ class ARCHModel():
 
         mp, vp, dp, weight = self._parse_parameters(params)
 
+        resids1 = self.resids(mp[0])
+        resids2 = self.resids(mp[1])
+        
+        sigma1, sigma2 = self.volatility.compute_variance(
+            vp, resids1, resids2, sigma1, sigma2, backcast, var_bounds
+        )
+        import pickle
+        with open("sigma1_data", "wb") as fp:   #Pickling
+            pickle.dump(sigma1, fp)
+        
+        with open("sigma2_data", "wb") as fp:   #Pickling
+            pickle.dump(sigma2, fp)
+            
+        with open("resids1", "wb") as fp:   #Pickling
+            pickle.dump(resids1, fp)
+        
+        with open("resids2", "wb") as fp:   #Pickling
+            pickle.dump(resids2, fp)
+        
         vol = np.zeros_like(resids1)
         sigma1, sigma2 = self.volatility.compute_variance(np.append(vp,weight), resids1, resids2, vol, vol,backcast, var_bounds)
         vol = cast(Float64Array, np.sqrt(vol))
