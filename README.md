@@ -1,15 +1,15 @@
-# Garch-Mixed-T-Gaussian-Distribution
-This project builds a Garch model with two sigmas (one follows T-distribution, the other follows Gaussian-distribution).
+# Garch-Double-Gaussian-Distribution
+This project builds a Garch model with two sigmas (both follow Gaussian-distribution).
 
 You can copy this folder into your Jupyter notebook. Then you can create a new ipynb file, and import functions as the following:
 
 ```py
 from Main import runModel, runModelSingleGuassian
-model = runModel("BTC") #Gaussian + t distribution
+model = runModel("BTC") #Double Gaussian
 runModelSingle("BTC", "t")
 
 model.sigma1
-model.sgima2
+model.sigma2
 model.resids1
 model.resids2
 ```
