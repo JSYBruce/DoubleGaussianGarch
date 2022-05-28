@@ -4,16 +4,10 @@ Spyder Editor
 
 This is a temporary script file.
 """
-from typing import Optional, Union, cast
 
-import numpy as np
-from scipy.special import gammaln
-
-from arch.typing import Float64Array, Int32Array
-from arch.utility.array import AbstractDocStringInheritor
-
+from customtyping import Float64Array, Int32Array, ArrayLike, ArrayLike1D, Float64Array
 from typing import Callable, List, Optional, Sequence, Tuple, Union
-
+from scipy.special import gamma
 from numpy import (
     abs,
     array,
@@ -32,12 +26,12 @@ from numpy import (
     sqrt,
     sum,
 )
-
-from arch.typing import ArrayLike, ArrayLike1D, Float64Array
+from scipy.special import comb, gamma, gammainc, gammaincc, gammaln
+import numpy as np
 
 class DoubleNormal():
     """
-    Standard normal distribution for use with ARCH models
+    t + normal distribution for use with ARCH models
 
     Parameters
     ----------
@@ -45,10 +39,12 @@ class DoubleNormal():
 
     def __init__(
         self) -> None:
-        self._name = "Double_Normal+Alpha+Mean"
-        self.name = "Double_Normal+Alpha+Mean"
+        self._name = "SkewT+Gaussian"
+        self.name = "SkewT+Gaussian"
+        self.num_params = 3
     def constraints(self) -> Tuple[Float64Array, Float64Array]:
-        return empty(0), empty(0)
+        return array([[1, 0], [-1, 0], [0, 1], [0, -1]]), array([2.05, -300.0, -1, -1])
+
 
     def bounds(self, resids: Float64Array) -> List[Tuple[float, float]]:
         return []
@@ -94,9 +90,25 @@ class DoubleNormal():
             +\frac{x^{2}}{\sigma^{2}}\right)
 
         """
-        mu1 = parameters[0]
-        mu2 = parameters[1]
-        lls = log( weight/sqrt(2*pi*sigma1)*exp(-0.5* (resids1 - mu1)**2/sigma1) + (1-weight)/sqrt(2*pi*sigma2)*exp(-0.5*(resids2 - mu2)**2 /sigma2) )
+        
+        eta = parameters[2]
+        lam = parameters[3]
+        const_c = exp(float(
+            gammaln((eta + 1) / 2) - gammaln(eta / 2) - log(pi * (eta - 2)) / 2
+        ))
+        const_a = float(4 * lam * const_c) * (eta - 2) / (eta - 1)
+        const_b = (1 + 3 * lam ** 2 - const_a ** 2) ** 0.5
+        resids = (resids1) / sigma1 ** 0.5
+        skewt_pdf = const_b * const_c / (sigma1**0.5)
+        if abs(lam) >= 1.0:
+            lam = sign(lam) * (1.0 - 1e-6)
+        llf_resid = (
+            (const_b * resids + const_a) / (1 + sign(resids + const_a / const_b) * lam)
+        ) ** 2
+        skewt_pdf *= (1 + llf_resid / (eta - 2))**(-(eta + 1) / 2 )
+        
+        
+        lls = log( weight * skewt_pdf + (1-weight)/sqrt(2*pi*sigma2)*exp(-0.5*(resids2)**2 /sigma2) )
         if individual:
             return lls
         else:
@@ -104,4 +116,6 @@ class DoubleNormal():
 
     def starting_values(self, std_resid: Float64Array) -> Float64Array:
         return empty(0)
+    
+
     
